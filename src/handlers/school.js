@@ -102,6 +102,33 @@ const schoolHandler = (bot) => {
     );
   });
 
+  // دریافت شناسه گروه پس از مدیر شدن ربات
+  bot.on("my_chat_member", async (ctx) => {
+    try {
+      const chat = ctx.chat;
+      const newStatus = ctx.myChatMember.new_chat_member.status;
+
+      // فقط گروه‌ها و سوپرگروه‌ها
+      if (!["group", "supergroup"].includes(chat.type)) return;
+
+      // فقط زمانی که ربات مدیر می‌شود
+      if (newStatus !== "administrator") return;
+
+      await ctx.telegram.sendMessage(
+        chat.id,
+        `✅ ربات با موفقیت مدیر گروه شد!
+
+🆔 شناسه عددی گروه:
+
+${chat.id}
+
+این شناسه را در گفت‌وگوی خصوصی ربات مدرسه ارسال کنید.`,
+      );
+    } catch (error) {
+      console.error("Group ID message error:", error);
+    }
+  });
+
   // بازگشت به صفحه اصلی و لغو ثبت‌نام
   bot.hears(BACK_BUTTON, async (ctx) => {
     if (ctx.chat.type !== "private") return;
