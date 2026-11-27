@@ -133,6 +133,144 @@ function createSchool(groupId, ownerId, ownerName, username, passwordHash) {
     .run(groupId, ownerId, ownerName, username, passwordHash);
 }
 
+// بررسی تکراری نبودن نام کاربری مدرسه
+function isSchoolUsernameTaken(username) {
+  return Boolean(
+    db
+      .prepare(
+        `
+            SELECT 1 FROM schools
+            WHERE username = ?
+        `,
+      )
+      .get(username),
+  );
+}
+
+// دریافت اطلاعات مدرسه با نام کاربری
+function getSchoolByUsername(username) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM schools
+    WHERE username = ?
+  `,
+    )
+    .get(username);
+}
+
+// تغییر رمز عبور مدرسه
+function updateSchoolPassword(username, passwordHash) {
+  return db
+    .prepare(
+      `
+    UPDATE schools
+    SET password_hash = ?
+    WHERE username = ?
+  `,
+    )
+    .run(passwordHash, username);
+}
+
+// ذخیره نشست ورود کاربر
+function saveSchoolSession(userId, schoolId) {
+  db.prepare(
+    `
+    INSERT INTO school_sessions (user_id, school_id)
+    VALUES (?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      school_id = excluded.school_id
+  `,
+  ).run(userId, schoolId);
+}
+
+// دریافت نشست ورود
+function getSchoolSession(userId) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM school_sessions
+    WHERE user_id = ?
+  `,
+    )
+    .get(userId);
+}
+
+// خروج از حساب
+function deleteSchoolSession(userId) {
+  db.prepare(
+    `
+    DELETE FROM school_sessions
+    WHERE user_id = ?
+  `,
+  ).run(userId);
+}
+
+// جدول نشست‌های ورود کاربران
+db.prepare(
+  `
+  CREATE TABLE IF NOT EXISTS school_sessions (
+    user_id INTEGER PRIMARY KEY,
+    school_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (school_id) REFERENCES schools(id)
+  )
+`,
+).run();
+
+function createManager(schoolId, userId, name, username) {
+  return db
+    .prepare(
+      `
+    INSERT INTO school_managers (school_id, user_id, name, username)
+    VALUES (?, ?, ?, ?)
+  `,
+    )
+    .run(schoolId, userId, name, username);
+}
+
+function getManagerByUsername(username) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM school_managers WHERE username = ?
+  `,
+    )
+    .get(username);
+}
+
+function getManagerByUserId(userId) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM school_managers WHERE user_id = ?
+  `,
+    )
+    .get(userId);
+}
+
+function isManagerUsernameTaken(username) {
+  return Boolean(
+    db
+      .prepare(
+        `
+      SELECT 1 FROM school_managers WHERE username = ?
+    `,
+      )
+      .get(username),
+  );
+}
+
+function getSchoolUsernameById(id) {
+  return db
+    .prepare(
+      `
+    SELECT username FROM schools WHERE id = ?
+  `,
+    )
+    .get(id)?.username;
+}
+
 module.exports = {
   db,
   saveGroup,
@@ -140,4 +278,15 @@ module.exports = {
   getRegistration,
   deleteRegistration,
   createSchool,
+  isSchoolUsernameTaken,
+  getSchoolByUsername,
+  updateSchoolPassword,
+  saveSchoolSession,
+  getSchoolSession,
+  deleteSchoolSession,
+  createManager,
+  getManagerByUsername,
+  getManagerByUserId,
+  isManagerUsernameTaken,
+  getSchoolUsernameById,
 };

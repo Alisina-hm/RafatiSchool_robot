@@ -9,10 +9,6 @@ const startHandler = (bot) => {
         .persistent(),
     );
   });
-
-  bot.hears("🔑 ورود به مدرسه", (ctx) => {
-    ctx.reply("شما گزینه ورود به مدرسه را انتخاب کردید.");
-  });
 };
 
 module.exports = startHandler;
