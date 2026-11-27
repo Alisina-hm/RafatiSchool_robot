@@ -218,6 +218,21 @@ db.prepare(
 `,
 ).run();
 
+// جدول مدیران مدارس
+db.prepare(
+  `
+  CREATE TABLE IF NOT EXISTS school_managers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (school_id) REFERENCES schools(id)
+  )
+`,
+).run();
+
 function createManager(schoolId, userId, name, username) {
   return db
     .prepare(
