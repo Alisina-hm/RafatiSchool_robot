@@ -1,10 +1,19 @@
 const Database = require("better-sqlite3");
 const path = require("path");
+const fs = require("fs");
 
-// ساخت دیتابیس در ریشه پروژه
-const db = new Database(path.join(__dirname, "../../database.sqlite"));
+// مسیر ذخیره دیتابیس
+const dataDirectory = process.env.DATA_DIR || path.join(__dirname, "../../");
 
-// ساخت جدول گروه‌ها
+if (!fs.existsSync(dataDirectory)) {
+  fs.mkdirSync(dataDirectory, { recursive: true });
+}
+
+const db = new Database(path.join(dataDirectory, "database.sqlite"));
+
+db.pragma("foreign_keys = ON");
+
+// جدول گروه‌ها
 db.prepare(
   `
     CREATE TABLE IF NOT EXISTS groups (
@@ -16,7 +25,36 @@ db.prepare(
 `,
 ).run();
 
-// ذخیره گروه یا به‌روزرسانی اطلاعات آن
+// جدول مدارس
+db.prepare(
+  `
+    CREATE TABLE IF NOT EXISTS schools (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id INTEGER NOT NULL UNIQUE,
+        owner_id INTEGER NOT NULL,
+        owner_name TEXT NOT NULL,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (group_id) REFERENCES groups(id)
+    )
+`,
+).run();
+
+// جدول مراحل ثبت مدرسه
+db.prepare(
+  `
+    CREATE TABLE IF NOT EXISTS school_registrations (
+        user_id INTEGER PRIMARY KEY,
+        group_id INTEGER,
+        step TEXT NOT NULL,
+        data TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+`,
+).run();
+
+// ذخیره اطلاعات گروه
 function saveGroup(id, title, username) {
   db.prepare(
     `
@@ -29,7 +67,77 @@ function saveGroup(id, title, username) {
   ).run(id, title, username || null);
 }
 
+// ذخیره یا به‌روزرسانی مرحله ثبت‌نام
+function saveRegistration(userId, groupId, step, data = {}) {
+  db.prepare(
+    `
+        INSERT INTO school_registrations (
+            user_id, group_id, step, data
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            group_id = excluded.group_id,
+            step = excluded.step,
+            data = excluded.data
+    `,
+  ).run(userId, groupId, step, JSON.stringify(data));
+}
+
+// دریافت مرحله ثبت‌نام
+function getRegistration(userId) {
+  const registration = db
+    .prepare(
+      `
+        SELECT * FROM school_registrations
+        WHERE user_id = ?
+    `,
+    )
+    .get(userId);
+
+  if (!registration) return null;
+
+  try {
+    registration.data = JSON.parse(registration.data || "{}");
+  } catch {
+    registration.data = {};
+  }
+
+  return registration;
+}
+
+// حذف ثبت‌نام موقت
+function deleteRegistration(userId) {
+  db.prepare(
+    `
+        DELETE FROM school_registrations
+        WHERE user_id = ?
+    `,
+  ).run(userId);
+}
+
+// ثبت مدرسه
+function createSchool(groupId, ownerId, ownerName, username, passwordHash) {
+  return db
+    .prepare(
+      `
+        INSERT INTO schools (
+            group_id,
+            owner_id,
+            owner_name,
+            username,
+            password_hash
+        )
+        VALUES (?, ?, ?, ?, ?)
+    `,
+    )
+    .run(groupId, ownerId, ownerName, username, passwordHash);
+}
+
 module.exports = {
   db,
   saveGroup,
+  saveRegistration,
+  getRegistration,
+  deleteRegistration,
+  createSchool,
 };

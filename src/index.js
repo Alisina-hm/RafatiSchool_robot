@@ -1,7 +1,9 @@
 const bot = require("./bot");
 const startHandler = require("./handlers/start");
+const schoolHandler = require("./handlers/school");
 
 startHandler(bot);
+schoolHandler(bot);
 
 bot
   .launch()
