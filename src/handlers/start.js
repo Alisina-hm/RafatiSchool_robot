@@ -1,0 +1,22 @@
+const { Markup } = require("telegraf");
+
+const startHandler = (bot) => {
+  bot.start((ctx) => {
+    ctx.reply(
+      "سلام! به ربات مدرسه خوش آمدید 🎓\n\nبرای ادامه یکی از گزینه‌های زیر را انتخاب کنید:",
+      Markup.keyboard([["🏫 ایجاد مدرسه"], ["🔑 ورود به مدرسه"]])
+        .resize()
+        .persistent(),
+    );
+  });
+
+  bot.hears("🏫 ایجاد مدرسه", (ctx) => {
+    ctx.reply("شما گزینه ایجاد مدرسه را انتخاب کردید.");
+  });
+
+  bot.hears("🔑 ورود به مدرسه", (ctx) => {
+    ctx.reply("شما گزینه ورود به مدرسه را انتخاب کردید.");
+  });
+};
+
+module.exports = startHandler;
