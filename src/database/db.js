@@ -286,6 +286,17 @@ function getSchoolUsernameById(id) {
     .get(id)?.username;
 }
 
+function getSchoolByGroupId(groupId) {
+  return db
+    .prepare(
+      `
+      SELECT * FROM schools
+      WHERE group_id = ?
+    `,
+    )
+    .get(groupId);
+}
+
 module.exports = {
   db,
   saveGroup,
@@ -304,4 +315,5 @@ module.exports = {
   getManagerByUserId,
   isManagerUsernameTaken,
   getSchoolUsernameById,
+  getSchoolByGroupId,
 };

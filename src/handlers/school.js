@@ -19,6 +19,7 @@ const {
   getManagerByUserId,
   isManagerUsernameTaken,
   getSchoolUsernameById,
+  getSchoolByGroupId,
 } = require("../database/db");
 
 // دکمه‌ها
@@ -354,6 +355,90 @@ ${chat.id}
         "❌ در دریافت پاسخ از هوش مصنوعی مشکلی پیش آمد. لطفاً کمی بعد دوباره امتحان کنید.",
         { reply_to_message_id: ctx.message.message_id },
       );
+    }
+  });
+
+  bot.command("botorder", async (ctx) => {
+    const commands = [
+      "/admins",
+      "/groupusername",
+      "/botorder",
+      "/price",
+      "/AskGemini",
+    ];
+
+    return ctx.reply(
+      "📋 فهرست دستورات ربات:\n\n" +
+        commands.map((command, index) => `${index + 1}. ${command}`).join("\n"),
+    );
+  });
+
+  // -----------------------------
+  // نمایش شناسه گروه ثبت‌شده
+  // -----------------------------
+
+  bot.command("groupusername", async (ctx) => {
+    if (!["group", "supergroup"].includes(ctx.chat.type)) {
+      return ctx.reply("⚠️ این دستور فقط در گروه‌ها قابل استفاده است.");
+    }
+
+    try {
+      const school = getSchoolByGroupId(ctx.chat.id);
+
+      if (!school) {
+        return ctx.reply("❌ این گروه در ربات به‌عنوان مدرسه ثبت نشده است.");
+      }
+
+      return ctx.reply(
+        `🏫 مدرسه: ${school.username}\n\n` +
+          `🆔 شناسه گروه ثبت‌شده:\n${school.group_id}`,
+      );
+    } catch (error) {
+      console.error("Group username error:", error);
+
+      return ctx.reply("❌ دریافت اطلاعات گروه ناموفق بود.");
+    }
+  });
+
+  // -----------------------------
+  // نمایش لیست ادمین‌های گروه
+  // -----------------------------
+
+  bot.command("admins", async (ctx) => {
+    if (!["group", "supergroup"].includes(ctx.chat.type)) {
+      return ctx.reply("⚠️ این دستور فقط در گروه‌ها قابل استفاده است.");
+    }
+
+    try {
+      await ctx.sendChatAction("typing");
+
+      const admins = await ctx.telegram.getChatAdministrators(ctx.chat.id);
+
+      if (!admins.length) {
+        return ctx.reply("❌ هیچ ادمینی پیدا نشد.");
+      }
+
+      const lines = admins.map((admin, index) => {
+        const user = admin.user;
+
+        const name =
+          [user.first_name, user.last_name].filter(Boolean).join(" ") ||
+          "بدون نام";
+
+        const role = admin.status === "creator" ? "👑 مالک گروه" : "🛡 ادمین";
+
+        return `${index + 1}. ${role}\n` + `👤 نام: ${name}\n`;
+      });
+
+      return ctx.reply(
+        "📋 فهرست ادمین‌های گروه\n\n" +
+          lines.join("\n\n━━━━━━━━━━━━━━\n\n") +
+          `\n\n👥 تعداد ادمین‌ها: ${admins.length}`,
+      );
+    } catch (error) {
+      console.error("Get admins error:", error);
+
+      return ctx.reply("❌ دریافت فهرست ادمین‌ها ناموفق بود.");
     }
   });
 
