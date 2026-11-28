@@ -297,6 +297,24 @@ function getSchoolByGroupId(groupId) {
     .get(groupId);
 }
 
+function getAllSchoolAdmins() {
+  return db
+    .prepare(
+      `
+    SELECT
+      schools.username AS school_username,
+      schools.owner_name,
+      school_managers.name AS manager_name,
+      school_managers.username AS manager_username
+    FROM schools
+    LEFT JOIN school_managers
+      ON school_managers.school_id = schools.id
+    ORDER BY schools.id
+  `,
+    )
+    .all();
+}
+
 module.exports = {
   db,
   saveGroup,
@@ -316,4 +334,5 @@ module.exports = {
   isManagerUsernameTaken,
   getSchoolUsernameById,
   getSchoolByGroupId,
+  getAllSchoolAdmins,
 };

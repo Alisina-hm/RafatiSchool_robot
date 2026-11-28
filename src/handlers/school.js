@@ -20,6 +20,7 @@ const {
   isManagerUsernameTaken,
   getSchoolUsernameById,
   getSchoolByGroupId,
+  getAllSchoolAdmins,
 } = require("../database/db");
 
 // دکمه‌ها
@@ -405,40 +406,61 @@ ${chat.id}
   // -----------------------------
 
   bot.command("admins", async (ctx) => {
-    if (!["group", "supergroup"].includes(ctx.chat.type)) {
-      return ctx.reply("⚠️ این دستور فقط در گروه‌ها قابل استفاده است.");
-    }
-
     try {
-      await ctx.sendChatAction("typing");
-
-      const admins = await ctx.telegram.getChatAdministrators(ctx.chat.id);
+      const admins = getAllSchoolAdmins();
 
       if (!admins.length) {
-        return ctx.reply("❌ هیچ ادمینی پیدا نشد.");
+        return ctx.reply("❌ هنوز هیچ مدرسه‌ای ثبت نشده است.");
       }
 
-      const lines = admins.map((admin, index) => {
-        const user = admin.user;
+      const schools = {};
 
-        const name =
-          [user.first_name, user.last_name].filter(Boolean).join(" ") ||
-          "بدون نام";
+      for (const admin of admins) {
+        if (!schools[admin.school_username]) {
+          schools[admin.school_username] = {
+            owner: admin.owner_name,
+            managers: [],
+          };
+        }
 
-        const role = admin.status === "creator" ? "👑 مالک گروه" : "🛡 ادمین";
+        if (admin.manager_username) {
+          schools[admin.school_username].managers.push({
+            name: admin.manager_name,
+            username: admin.manager_username,
+          });
+        }
+      }
 
-        return `${index + 1}. ${role}\n` + `👤 نام: ${name}\n`;
+      let totalManagers = 0;
+
+      const result = Object.entries(schools).map(([username, data]) => {
+        totalManagers += data.managers.length;
+
+        const managers = data.managers.length
+          ? data.managers
+              .map(
+                (manager, index) =>
+                  `${index + 1}. 🛡 ${manager.name} (@${manager.username})`,
+              )
+              .join("\n")
+          : "مدیری ثبت نشده است.";
+
+        return (
+          `🏫 مدرسه: ${username}\n\n` +
+          `👑 مالک: ${data.owner}\n\n` +
+          `🛡 مدیران:\n${managers}`
+        );
       });
 
       return ctx.reply(
-        "📋 فهرست ادمین‌های گروه\n\n" +
-          lines.join("\n\n━━━━━━━━━━━━━━\n\n") +
-          `\n\n👥 تعداد ادمین‌ها: ${admins.length}`,
+        "📋 فهرست مالکان و مدیران ربات\n\n" +
+          result.join("\n\n━━━━━━━━━━━━━━\n\n") +
+          `\n\n👑 تعداد مدارس: ${Object.keys(schools).length}` +
+          `\n🛡 تعداد مدیران: ${totalManagers}`,
       );
     } catch (error) {
-      console.error("Get admins error:", error);
-
-      return ctx.reply("❌ دریافت فهرست ادمین‌ها ناموفق بود.");
+      console.error("Get school admins error:", error);
+      return ctx.reply("❌ دریافت فهرست ناموفق بود.");
     }
   });
 
