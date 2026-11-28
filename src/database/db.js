@@ -224,11 +224,13 @@ db.prepare(
   CREATE TABLE IF NOT EXISTS school_managers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     school_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    username TEXT NOT NULL UNIQUE,
+    username TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (school_id) REFERENCES schools(id)
+    FOREIGN KEY (school_id) REFERENCES schools(id),
+    UNIQUE (school_id, user_id),
+    UNIQUE (school_id, username)
   )
 `,
 ).run();
@@ -297,6 +299,101 @@ function getSchoolByGroupId(groupId) {
     .get(groupId);
 }
 
+// دریافت مدرسه با شناسه دیتابیس
+function getSchoolById(id) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM schools WHERE id = ?
+  `,
+    )
+    .get(id);
+}
+
+// دریافت مدیران یک مدرسه
+function getManagersBySchoolId(schoolId) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM school_managers
+    WHERE school_id = ?
+    ORDER BY id
+  `,
+    )
+    .all(schoolId);
+}
+
+// ثبت تکلیف
+function createHomework(
+  schoolId,
+  weekday,
+  homeworkDate,
+  task1,
+  task2,
+  userId,
+  creatorName,
+) {
+  return db
+    .prepare(
+      `
+    INSERT INTO homeworks (
+      school_id, weekday, homework_date,
+      task1, task2, created_by, creator_name
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `,
+    )
+    .run(schoolId, weekday, homeworkDate, task1, task2, userId, creatorName);
+}
+
+// دریافت تکالیف آینده مدرسه
+function getUpcomingHomeworks(schoolId, today) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM homeworks
+    WHERE school_id = ? AND homework_date >= ?
+    ORDER BY homework_date ASC, id DESC
+  `,
+    )
+    .all(schoolId, today);
+}
+
+// ثبت امتحان
+function createExam(
+  schoolId,
+  weekday,
+  examDate,
+  subjects,
+  userId,
+  creatorName,
+) {
+  return db
+    .prepare(
+      `
+    INSERT INTO exams (
+      school_id, weekday, exam_date,
+      subjects, created_by, creator_name
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `,
+    )
+    .run(schoolId, weekday, examDate, subjects, userId, creatorName);
+}
+
+// دریافت امتحان‌های آینده مدرسه
+function getUpcomingExams(schoolId, today) {
+  return db
+    .prepare(
+      `
+    SELECT * FROM exams
+    WHERE school_id = ? AND exam_date >= ?
+    ORDER BY exam_date ASC, id DESC
+  `,
+    )
+    .all(schoolId, today);
+}
+
 function getAllSchoolAdmins() {
   return db
     .prepare(
@@ -314,6 +411,41 @@ function getAllSchoolAdmins() {
     )
     .all();
 }
+
+// جدول تکالیف
+db.prepare(
+  `
+  CREATE TABLE IF NOT EXISTS homeworks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id INTEGER NOT NULL,
+    weekday TEXT NOT NULL,
+    homework_date TEXT NOT NULL,
+    task1 TEXT NOT NULL,
+    task2 TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    creator_name TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (school_id) REFERENCES schools(id)
+  )
+`,
+).run();
+
+// جدول امتحان‌ها
+db.prepare(
+  `
+  CREATE TABLE IF NOT EXISTS exams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    school_id INTEGER NOT NULL,
+    weekday TEXT NOT NULL,
+    exam_date TEXT NOT NULL,
+    subjects TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    creator_name TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (school_id) REFERENCES schools(id)
+  )
+`,
+).run();
 
 module.exports = {
   db,
@@ -335,4 +467,10 @@ module.exports = {
   getSchoolUsernameById,
   getSchoolByGroupId,
   getAllSchoolAdmins,
+  getSchoolById,
+  getManagersBySchoolId,
+  createHomework,
+  getUpcomingHomeworks,
+  createExam,
+  getUpcomingExams,
 };

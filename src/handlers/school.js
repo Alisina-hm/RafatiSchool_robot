@@ -1,6 +1,7 @@
 const { Markup } = require("telegraf");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
+const jalaali = require("jalaali-js");
 
 const {
   saveGroup,
@@ -21,6 +22,12 @@ const {
   getSchoolUsernameById,
   getSchoolByGroupId,
   getAllSchoolAdmins,
+  getSchoolById,
+  getManagersBySchoolId,
+  createHomework,
+  getUpcomingHomeworks,
+  createExam,
+  getUpcomingExams,
 } = require("../database/db");
 
 // دکمه‌ها
@@ -74,11 +81,24 @@ const managerLoginMenu = Markup.keyboard([
   [BACK_BUTTON],
 ]).resize();
 
-// منوی پنل
-const dashboardMenu = Markup.keyboard([
+// پنل مالک مدرسه
+const ownerDashboardMenu = Markup.keyboard([
+  ["👥 ادمین‌ها"],
+  ["📝 امتحان‌ها", "📚 تکالیف"],
   [LOGOUT_BUTTON],
   [BACK_BUTTON],
-]).resize();
+])
+  .resize()
+  .persistent();
+
+// پنل مدیر مدرسه
+const managerDashboardMenu = Markup.keyboard([
+  ["📝 امتحان‌ها", "📚 تکالیف"],
+  [LOGOUT_BUTTON],
+  [BACK_BUTTON],
+])
+  .resize()
+  .persistent();
 
 // نمایش راهنما
 const showGuide = (ctx) => {
@@ -94,6 +114,87 @@ const showGuide = (ctx) => {
     guideMenu,
   );
 };
+
+const weekdays = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه"];
+
+const weekdayKeyboard = (type) =>
+  Markup.inlineKeyboard(
+    weekdays.map((day, index) => [
+      Markup.button.callback(day, `school:${type}:${index}`),
+    ]),
+  );
+
+// تبدیل اعداد فارسی و عربی به انگلیسی
+function normalizeDigits(value) {
+  return value
+    .replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit))
+    .replace(/[٠-٩]/g, (digit) => "٠١٢٣٤٥٦٧٨٩".indexOf(digit));
+}
+
+// تبدیل تاریخ شمسی به میلادی و بررسی صحت آن
+function parseJalaliDate(value) {
+  const normalized = normalizeDigits(value.trim());
+  const match = normalized.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  if (!jalaali.isValidJalaaliDate(year, month, day)) {
+    return null;
+  }
+
+  const gregorian = jalaali.toGregorian(year, month, day);
+
+  const isoDate = [
+    gregorian.gy,
+    String(gregorian.gm).padStart(2, "0"),
+    String(gregorian.gd).padStart(2, "0"),
+  ].join("-");
+
+  return {
+    iso: isoDate,
+    jalali: `${year}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}`,
+    weekdayIndex: new Date(
+      Date.UTC(gregorian.gy, gregorian.gm - 1, gregorian.gd),
+    ).getUTCDay(),
+  };
+}
+
+// تاریخ امروز به فرمت میلادی برای مقایسه دیتابیس
+function getTodayISO() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+// تبدیل تاریخ میلادی ذخیره‌شده به شمسی
+function formatJalaliDate(isoDate) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const result = jalaali.toJalaali(year, month, day);
+
+  return `${result.jy}/${String(result.jm).padStart(2, "0")}/${String(result.jd).padStart(2, "0")}`;
+}
+
+// پیدا کردن نام ثبت‌کننده
+function getCreatorName(ctx) {
+  return (
+    [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") ||
+    ctx.from.username ||
+    "کاربر"
+  );
+}
 
 const schoolHandler = (bot) => {
   // نمایش منوی ایجاد مدرسه
@@ -366,6 +467,8 @@ ${chat.id}
       "/botorder",
       "/price",
       "/AskGemini",
+      "/homework",
+      "/examdate",
     ];
 
     return ctx.reply(
@@ -406,62 +509,33 @@ ${chat.id}
   // -----------------------------
 
   bot.command("admins", async (ctx) => {
-    try {
-      const admins = getAllSchoolAdmins();
-
-      if (!admins.length) {
-        return ctx.reply("❌ هنوز هیچ مدرسه‌ای ثبت نشده است.");
-      }
-
-      const schools = {};
-
-      for (const admin of admins) {
-        if (!schools[admin.school_username]) {
-          schools[admin.school_username] = {
-            owner: admin.owner_name,
-            managers: [],
-          };
-        }
-
-        if (admin.manager_username) {
-          schools[admin.school_username].managers.push({
-            name: admin.manager_name,
-            username: admin.manager_username,
-          });
-        }
-      }
-
-      let totalManagers = 0;
-
-      const result = Object.entries(schools).map(([username, data]) => {
-        totalManagers += data.managers.length;
-
-        const managers = data.managers.length
-          ? data.managers
-              .map(
-                (manager, index) =>
-                  `${index + 1}. 🛡 ${manager.name} (@${manager.username})`,
-              )
-              .join("\n")
-          : "مدیری ثبت نشده است.";
-
-        return (
-          `🏫 مدرسه: ${username}\n\n` +
-          `👑 مالک: ${data.owner}\n\n` +
-          `🛡 مدیران:\n${managers}`
-        );
-      });
-
-      return ctx.reply(
-        "📋 فهرست مالکان و مدیران ربات\n\n" +
-          result.join("\n\n━━━━━━━━━━━━━━\n\n") +
-          `\n\n👑 تعداد مدارس: ${Object.keys(schools).length}` +
-          `\n🛡 تعداد مدیران: ${totalManagers}`,
-      );
-    } catch (error) {
-      console.error("Get school admins error:", error);
-      return ctx.reply("❌ دریافت فهرست ناموفق بود.");
+    // فقط در گروه قابل اجرا باشد
+    if (ctx.chat.type === "private") {
+      return ctx.reply("این دستور فقط داخل گروه مدرسه قابل استفاده است.");
     }
+
+    // پیدا کردن مدرسه متصل به گروه فعلی
+    const school = getSchoolByGroupId(ctx.chat.id);
+
+    if (!school) {
+      return ctx.reply("این گروه هنوز به هیچ مدرسه‌ای متصل نشده است.");
+    }
+
+    // دریافت مدیران فقط همین مدرسه
+    const managers = getManagersBySchoolId(school.id);
+
+    let message = `👥 مدیران مدرسه ${school.username}\n\n`;
+
+    if (managers.length === 0) {
+      message += "هنوز هیچ مدیری برای این مدرسه ثبت نشده است.";
+    } else {
+      managers.forEach((manager, index) => {
+        message += `${index + 1}. ${manager.name}\n`;
+        message += `نام کاربری: @${manager.username}\n\n`;
+      });
+    }
+
+    return ctx.reply(message);
   });
 
   // -----------------------------
@@ -567,6 +641,224 @@ ${chat.id}
     }
   });
 
+  // -----------------------------
+  // نمایش پنل متناسب با نقش کاربر
+  // -----------------------------
+  bot.hears("👥 ادمین‌ها", async (ctx) => {
+    if (ctx.chat.type !== "private") return;
+
+    const session = getSchoolSession(ctx.from.id);
+
+    if (!session) {
+      return ctx.reply("❌ ابتدا وارد حساب مدرسه شوید.", mainMenu);
+    }
+
+    const school = getSchoolById(session.school_id);
+
+    if (!school || school.owner_id !== ctx.from.id) {
+      return ctx.reply("❌ فقط مالک مدرسه به این بخش دسترسی دارد.");
+    }
+
+    const managers = getManagersBySchoolId(school.id);
+
+    const managerList = managers.length
+      ? managers
+          .map(
+            (manager, index) =>
+              `${index + 1}. 👤 ${manager.name}\n🔑 @${manager.username}`,
+          )
+          .join("\n\n")
+      : "هنوز مدیری برای این مدرسه ثبت نشده است.";
+
+    return ctx.reply(
+      `👥 ادمین‌های مدرسه\n\n` +
+        `👑 مالک: ${school.owner_name}\n\n` +
+        `🛡 مدیران:\n${managerList}`,
+      ownerDashboardMenu,
+    );
+  });
+
+  // -----------------------------
+  // شروع ثبت تکالیف
+  // -----------------------------
+  bot.hears("📚 تکالیف", async (ctx) => {
+    if (ctx.chat.type !== "private") return;
+
+    const session = getSchoolSession(ctx.from.id);
+
+    if (!session) {
+      return ctx.reply("❌ ابتدا وارد حساب مدرسه شوید.", mainMenu);
+    }
+
+    deleteRegistration(ctx.from.id);
+
+    saveRegistration(ctx.from.id, null, "waiting_homework_weekday", {
+      schoolId: session.school_id,
+    });
+
+    return ctx.reply(
+      "📚 ثبت تکالیف\n\nروز موردنظر را انتخاب کنید:",
+      weekdayKeyboard("homework"),
+    );
+  });
+
+  // -----------------------------
+  // شروع ثبت امتحان
+  // -----------------------------
+  bot.hears("📝 امتحان‌ها", async (ctx) => {
+    if (ctx.chat.type !== "private") return;
+
+    const session = getSchoolSession(ctx.from.id);
+
+    if (!session) {
+      return ctx.reply("❌ ابتدا وارد حساب مدرسه شوید.", mainMenu);
+    }
+
+    deleteRegistration(ctx.from.id);
+
+    saveRegistration(ctx.from.id, null, "waiting_exam_weekday", {
+      schoolId: session.school_id,
+    });
+
+    return ctx.reply(
+      "📝 ثبت امتحان\n\nروز برگزاری امتحان را انتخاب کنید:",
+      weekdayKeyboard("exam"),
+    );
+  });
+
+  // -----------------------------
+  // انتخاب روز تکالیف
+  // -----------------------------
+  bot.action(/^school:homework:(\d)$/, async (ctx) => {
+    const index = Number(ctx.match[1]);
+    const userId = ctx.from.id;
+    const registration = getRegistration(userId);
+    const session = getSchoolSession(userId);
+
+    if (
+      !session ||
+      !registration ||
+      registration.step !== "waiting_homework_weekday" ||
+      registration.data.schoolId !== session.school_id ||
+      !weekdays[index]
+    ) {
+      return ctx.answerCbQuery("این درخواست معتبر نیست.", {
+        show_alert: true,
+      });
+    }
+
+    saveRegistration(userId, null, "waiting_homework_task1", {
+      schoolId: session.school_id,
+      weekday: weekdays[index],
+    });
+
+    await ctx.answerCbQuery();
+
+    return ctx.editMessageText(
+      `📚 ثبت تکالیف ${weekdays[index]}\n\n` +
+        "✏️ تکلیف اول را وارد کنید:\n\n" +
+        "مثال: ریاضی، حل تمرین صفحه ۳۰",
+    );
+  });
+
+  // -----------------------------
+  // انتخاب روز امتحان
+  // -----------------------------
+  bot.action(/^school:exam:(\d)$/, async (ctx) => {
+    const index = Number(ctx.match[1]);
+    const userId = ctx.from.id;
+    const registration = getRegistration(userId);
+    const session = getSchoolSession(userId);
+
+    if (
+      !session ||
+      !registration ||
+      registration.step !== "waiting_exam_weekday" ||
+      registration.data.schoolId !== session.school_id ||
+      !weekdays[index]
+    ) {
+      return ctx.answerCbQuery("این درخواست معتبر نیست.", {
+        show_alert: true,
+      });
+    }
+
+    saveRegistration(userId, null, "waiting_exam_subjects", {
+      schoolId: session.school_id,
+      weekday: weekdays[index],
+    });
+
+    await ctx.answerCbQuery();
+
+    return ctx.editMessageText(
+      `📝 ثبت امتحان ${weekdays[index]}\n\n` +
+        "📖 نام درس یا درس‌های امتحان را وارد کنید.\n\n" +
+        "مثال: ریاضی و فیزیک",
+    );
+  });
+
+  // -----------------------------
+  // دستورات نمایش تکالیف در گروه
+  // -----------------------------
+  bot.command("homework", async (ctx) => {
+    if (!["group", "supergroup"].includes(ctx.chat.type)) return;
+
+    const school = getSchoolByGroupId(ctx.chat.id);
+
+    if (!school) {
+      return ctx.reply("❌ این گروه مدرسه ثبت‌شده نیست.");
+    }
+
+    const records = getUpcomingHomeworks(school.id, getTodayISO());
+
+    if (!records.length) {
+      return ctx.reply("📚 تکلیف آینده‌ای برای این مدرسه ثبت نشده است.");
+    }
+
+    const message = records
+      .map(
+        (item, index) =>
+          `${index + 1}. 📚 ${item.weekday}\n` +
+          `📅 تاریخ: ${formatJalaliDate(item.homework_date)}\n\n` +
+          `1️⃣ تکلیف اول: ${item.task1}\n` +
+          `2️⃣ تکلیف دوم: ${item.task2}\n\n` +
+          `👤 ثبت‌کننده: ${item.creator_name}`,
+      )
+      .join("\n\n━━━━━━━━━━━━━━\n\n");
+
+    return ctx.reply("📚 تکالیف مدرسه\n\n" + message);
+  });
+
+  // -----------------------------
+  // دستورات نمایش امتحان‌ها در گروه
+  // -----------------------------
+  bot.command("examdate", async (ctx) => {
+    if (!["group", "supergroup"].includes(ctx.chat.type)) return;
+
+    const school = getSchoolByGroupId(ctx.chat.id);
+
+    if (!school) {
+      return ctx.reply("❌ این گروه مدرسه ثبت‌شده نیست.");
+    }
+
+    const records = getUpcomingExams(school.id, getTodayISO());
+
+    if (!records.length) {
+      return ctx.reply("📝 امتحان آینده‌ای برای این مدرسه ثبت نشده است.");
+    }
+
+    const message = records
+      .map(
+        (item, index) =>
+          `${index + 1}. 📝 ${item.weekday}\n` +
+          `📅 تاریخ: ${formatJalaliDate(item.exam_date)}\n` +
+          `📖 درس‌ها: ${item.subjects}\n` +
+          `👤 ثبت‌کننده: ${item.creator_name}`,
+      )
+      .join("\n\n━━━━━━━━━━━━━━\n\n");
+
+    return ctx.reply("📝 امتحان‌های آینده مدرسه\n\n" + message);
+  });
+
   // دریافت پیام‌های متنی
   bot.on("text", async (ctx, next) => {
     if (ctx.chat.type !== "private") return next();
@@ -576,6 +868,238 @@ ${chat.id}
     const text = ctx.message.text.trim();
 
     if (!registration) return next();
+
+    // -----------------------------
+    // دریافت تکلیف اول
+    // -----------------------------
+    if (registration.step === "waiting_homework_task1") {
+      if (text.length > 1000) {
+        return ctx.reply(
+          "❌ متن تکلیف بیش از حد طولانی است. کوتاه‌تر بنویسید.",
+        );
+      }
+
+      if (text.length < 2) {
+        return ctx.reply("❌ متن تکلیف معتبر نیست. دوباره وارد کنید.");
+      }
+
+      saveRegistration(userId, null, "waiting_homework_task2", {
+        ...registration.data,
+        task1: text,
+      });
+
+      return ctx.reply(
+        "✅ تکلیف اول ثبت شد.\n\n" + "✏️ حالا تکلیف دوم را وارد کنید:",
+      );
+    }
+
+    // -----------------------------
+    // دریافت تکلیف دوم
+    // -----------------------------
+    if (registration.step === "waiting_homework_task2") {
+      if (text.length > 1000) {
+        return ctx.reply(
+          "❌ متن تکلیف بیش از حد طولانی است. کوتاه‌تر بنویسید.",
+        );
+      }
+
+      if (text.length < 2) {
+        return ctx.reply("❌ متن تکلیف معتبر نیست. دوباره وارد کنید.");
+      }
+
+      saveRegistration(userId, null, "waiting_homework_date", {
+        ...registration.data,
+        task2: text,
+      });
+
+      return ctx.reply(
+        "✅ تکلیف دوم ثبت شد.\n\n" +
+          "📅 حالا تاریخ انجام تکالیف را به شمسی وارد کنید.\n\n" +
+          "مثال: ۱۴۰۵/۰۹/۱۵",
+      );
+    }
+
+    // -----------------------------
+    // دریافت تاریخ تکالیف و ذخیره
+    // -----------------------------
+    if (registration.step === "waiting_homework_date") {
+      const date = parseJalaliDate(text);
+
+      if (!date) {
+        return ctx.reply(
+          "❌ تاریخ معتبر نیست.\n\n" +
+            "تاریخ را به شکل سال/ماه/روز وارد کنید.\n" +
+            "مثال: ۱۴۰۵/۰۹/۱۵",
+        );
+      }
+
+      const weekdayIndex = weekdays.indexOf(registration.data.weekday);
+      const expectedJsDay = [6, 0, 1, 2, 3][weekdayIndex];
+
+      if (date.weekdayIndex !== expectedJsDay) {
+        return ctx.reply(
+          `❌ تاریخ واردشده با ${registration.data.weekday} مطابقت ندارد.\n\n` +
+            "لطفاً تاریخ درست را وارد کنید.",
+        );
+      }
+
+      if (date.iso < getTodayISO()) {
+        return ctx.reply("❌ تاریخ تکلیف نمی‌تواند مربوط به گذشته باشد.");
+      }
+
+      const session = getSchoolSession(userId);
+      const school = session && getSchoolById(session.school_id);
+
+      if (
+        !school ||
+        school.id !== registration.data.schoolId ||
+        (school.owner_id !== userId &&
+          getManagerByUserId(userId)?.school_id !== school.id)
+      ) {
+        deleteRegistration(userId);
+        return ctx.reply(
+          "❌ نشست شما معتبر نیست. دوباره وارد حساب شوید.",
+          mainMenu,
+        );
+      }
+
+      const creatorName = getCreatorName(ctx);
+
+      try {
+        createHomework(
+          school.id,
+          registration.data.weekday,
+          date.iso,
+          registration.data.task1,
+          registration.data.task2,
+          userId,
+          creatorName,
+        );
+
+        await ctx.telegram.sendMessage(
+          school.group_id,
+          "📚 تکالیف جدید ثبت شد!\n\n" +
+            `📅 روز: ${registration.data.weekday}\n` +
+            `🗓 تاریخ: ${date.jalali}\n\n` +
+            `1️⃣ تکلیف اول:\n${registration.data.task1}\n\n` +
+            `2️⃣ تکلیف دوم:\n${registration.data.task2}\n\n` +
+            `👤 ثبت‌کننده: ${creatorName}`,
+        );
+
+        deleteRegistration(userId);
+
+        return ctx.reply(
+          "🎉 تکالیف با موفقیت ثبت شدند و در گروه مدرسه اعلام شدند.",
+          school.owner_id === userId
+            ? ownerDashboardMenu
+            : managerDashboardMenu,
+        );
+      } catch (error) {
+        console.error("Homework registration error:", error);
+
+        return ctx.reply("❌ ثبت تکالیف با خطا مواجه شد. دوباره تلاش کنید.");
+      }
+    }
+
+    // -----------------------------
+    // دریافت نام درس‌های امتحان
+    // -----------------------------
+    if (registration.step === "waiting_exam_subjects") {
+      if (text.length < 2 || text.length > 500) {
+        return ctx.reply("❌ نام درس‌ها معتبر نیست. دوباره وارد کنید.");
+      }
+
+      saveRegistration(userId, null, "waiting_exam_date", {
+        ...registration.data,
+        subjects: text,
+      });
+
+      return ctx.reply(
+        "✅ نام درس‌ها ثبت شد.\n\n" +
+          "📅 تاریخ دقیق امتحان را به شمسی وارد کنید.\n\n" +
+          "مثال: ۱۴۰۵/۰۹/۱۵",
+      );
+    }
+
+    // -----------------------------
+    // دریافت تاریخ امتحان و ذخیره
+    // -----------------------------
+    if (registration.step === "waiting_exam_date") {
+      const date = parseJalaliDate(text);
+
+      if (!date) {
+        return ctx.reply(
+          "❌ تاریخ معتبر نیست.\n\n" +
+            "تاریخ را به شکل سال/ماه/روز وارد کنید.\n" +
+            "مثال: ۱۴۰۵/۰۹/۱۵",
+        );
+      }
+
+      const weekdayIndex = weekdays.indexOf(registration.data.weekday);
+      const expectedJsDay = [6, 0, 1, 2, 3][weekdayIndex];
+
+      if (date.weekdayIndex !== expectedJsDay) {
+        return ctx.reply(
+          `❌ تاریخ واردشده با ${registration.data.weekday} مطابقت ندارد.\n\n` +
+            "لطفاً تاریخ درست را وارد کنید.",
+        );
+      }
+
+      if (date.iso < getTodayISO()) {
+        return ctx.reply("❌ تاریخ امتحان نمی‌تواند مربوط به گذشته باشد.");
+      }
+
+      const session = getSchoolSession(userId);
+      const school = session && getSchoolById(session.school_id);
+
+      if (
+        !school ||
+        school.id !== registration.data.schoolId ||
+        (school.owner_id !== userId &&
+          getManagerByUserId(userId)?.school_id !== school.id)
+      ) {
+        deleteRegistration(userId);
+        return ctx.reply(
+          "❌ نشست شما معتبر نیست. دوباره وارد حساب شوید.",
+          mainMenu,
+        );
+      }
+
+      const creatorName = getCreatorName(ctx);
+
+      try {
+        createExam(
+          school.id,
+          registration.data.weekday,
+          date.iso,
+          registration.data.subjects,
+          userId,
+          creatorName,
+        );
+
+        await ctx.telegram.sendMessage(
+          school.group_id,
+          "📝 امتحان جدید ثبت شد!\n\n" +
+            `📅 روز: ${registration.data.weekday}\n` +
+            `🗓 تاریخ: ${date.jalali}\n` +
+            `📖 درس‌ها: ${registration.data.subjects}\n\n` +
+            `👤 ثبت‌کننده: ${creatorName}`,
+        );
+
+        deleteRegistration(userId);
+
+        return ctx.reply(
+          "🎉 امتحان با موفقیت ثبت شد و در گروه مدرسه اعلام شد.",
+          school.owner_id === userId
+            ? ownerDashboardMenu
+            : managerDashboardMenu,
+        );
+      } catch (error) {
+        console.error("Exam registration error:", error);
+
+        return ctx.reply("❌ ثبت امتحان با خطا مواجه شد. دوباره تلاش کنید.");
+      }
+    }
 
     // -----------------------------
     // ورود مالک: نام کاربری
@@ -743,7 +1267,7 @@ ${chat.id}
             `👤 نام: ${name}\n` +
             `🔑 نام کاربری اختصاصی: ${username}\n\n` +
             "از این پس می‌توانید با نام کاربری اختصاصی خود وارد شوید.",
-          dashboardMenu,
+          managerDashboardMenu,
         );
       } catch (error) {
         console.error("Manager creation error:", error);
@@ -923,7 +1447,7 @@ ${chat.id}
           `👤 مدیر: ${manager.name}\n` +
           `🔑 نام کاربری: ${manager.username}\n\n` +
           "به پنل مدیریت خوش آمدید.",
-        dashboardMenu,
+        managerDashboardMenu,
       );
     }
 
@@ -1357,7 +1881,7 @@ ${chat.id}
           `🏫 مدرسه: ${school.title || school.username}\n` +
           "👑 نقش: مالک مدرسه\n\n" +
           "به پنل مالک خوش آمدید.",
-        dashboardMenu,
+        ownerDashboardMenu,
       );
     } catch (error) {
       console.error("Owner login approval error:", error);
