@@ -246,6 +246,177 @@ ${chat.id}
     await ctx.reply("🏠 به صفحه اصلی ربات بازگشتید.", mainMenu);
   });
 
+  // -----------------------------
+  // پرسش از هوش مصنوعی Gemini
+  // -----------------------------
+  bot.hears(/^\/AskGemini(?:@\w+)?(?:\s+([\s\S]+))?$/i, async (ctx) => {
+    if (!["group", "supergroup"].includes(ctx.chat.type)) {
+      return ctx.reply("⚠️ این دستور فقط در گروه‌های مدرسه قابل استفاده است.");
+    }
+
+    const question = ctx.match[1]?.trim();
+
+    if (!question) {
+      return ctx.reply(
+        "📝 لطفاً سؤال خود را بعد از دستور بنویسید.\n\n" +
+          "مثال:\n/AskGemini چرا آسمان آبی است؟",
+        { reply_to_message_id: ctx.message.message_id },
+      );
+    }
+
+    if (question.length > 2000) {
+      return ctx.reply("❌ متن سؤال بیش از حد طولانی است.", {
+        reply_to_message_id: ctx.message.message_id,
+      });
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return ctx.reply("❌ کلید اتصال به Gemini تنظیم نشده است.", {
+        reply_to_message_id: ctx.message.message_id,
+      });
+    }
+
+    try {
+      await ctx.telegram.sendChatAction(ctx.chat.id, "typing");
+
+      const { GoogleGenAI } = await import("@google/genai");
+
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents: question,
+        config: {
+          systemInstruction:
+            "تو دستیار آموزشی ربات مدرسه رائفتی هستی. به زبان فارسی، دقیق، ساده و قابل فهم پاسخ بده.",
+          maxOutputTokens: 800,
+        },
+      });
+
+      const answer = response.text?.trim();
+
+      if (!answer) {
+        throw new Error("Gemini returned an empty response.");
+      }
+
+      return ctx.reply(answer.slice(0, 3900), {
+        reply_to_message_id: ctx.message.message_id,
+      });
+    } catch (error) {
+      console.error("Gemini API Error:", error);
+
+      return ctx.reply(
+        "❌ در دریافت پاسخ از هوش مصنوعی مشکلی پیش آمد. لطفاً کمی بعد دوباره امتحان کنید.",
+        { reply_to_message_id: ctx.message.message_id },
+      );
+    }
+  });
+
+  // -----------------------------
+  // قیمت روز ارز، طلا، نفت و رمزارز
+  // -----------------------------
+
+  bot.command("price", async (ctx) => {
+    if (!["group", "supergroup"].includes(ctx.chat.type)) {
+      return ctx.reply("⚠️ این دستور فقط در گروه‌ها قابل استفاده است.");
+    }
+
+    try {
+      await ctx.sendChatAction("typing");
+
+      const response = await fetch("https://nerkhara.com/api/v1/latest.json", {
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API Error: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (!Array.isArray(result.items)) {
+        throw new Error("Invalid API response");
+      }
+
+      const assets = [
+        { id: "usd", name: "🇺🇸 دلار آمریکا", unit: "تومان" },
+        { id: "cad", name: "🇨🇦 دلار کانادا", unit: "تومان" },
+        { id: "eur", name: "🇪🇺 یورو", unit: "تومان" },
+        { id: "gbp", name: "🇬🇧 پوند انگلیس", unit: "تومان" },
+        { id: "gold-18k", name: "🟡 طلای ۱۸ عیار", unit: "تومان" },
+        { id: "brent", name: "🛢 نفت برنت", unit: "دلار" },
+        { id: "usdt", name: "🟢 تتر", unit: "تومان" },
+        { id: "btc", name: "₿ بیت‌کوین", unit: "USDT" },
+      ];
+
+      const formatPrice = (price) =>
+        new Intl.NumberFormat("fa-IR", {
+          maximumFractionDigits: 2,
+        }).format(price);
+
+      const lines = [];
+
+      for (const asset of assets) {
+        const item = result.items.find((i) => i.id === asset.id);
+
+        if (
+          !item ||
+          typeof item.price !== "number" ||
+          !Number.isFinite(item.price) ||
+          item.stale
+        ) {
+          throw new Error(`Invalid or stale price: ${asset.id}`);
+        }
+
+        lines.push(
+          `${asset.name}\n💰 ${formatPrice(item.price)} ${asset.unit}`,
+        );
+
+        if (asset.id === "btc" && Number.isFinite(item.price_irt)) {
+          lines.push(`💵 معادل تومانی: ${formatPrice(item.price_irt)} تومان`);
+        }
+      }
+
+      const updated = result.items
+        .filter((item) => assets.some((asset) => asset.id === item.id))
+        .map((item) => item.updated_utc)
+        .filter(Boolean)
+        .sort()
+        .pop();
+
+      const updatedDate = updated ? new Date(`${updated}Z`) : null;
+
+      const updatedText =
+        updatedDate && !Number.isNaN(updatedDate.getTime())
+          ? new Intl.DateTimeFormat("fa-IR", {
+              timeZone: "Asia/Tehran",
+              dateStyle: "short",
+              timeStyle: "short",
+            }).format(updatedDate)
+          : "نامشخص";
+
+      const message =
+        "📊 گزارش قیمت بازار آزاد\n\n" +
+        lines.join("\n\n") +
+        "\n\n━━━━━━━━━━━━━━\n" +
+        `🕒 آخرین به‌روزرسانی: ${updatedText}\n` +
+        "📡 منبع: NerkhAra\n" +
+        "⚠️ قیمت‌ها نرخ مرجع هستند و ممکن است با قیمت معامله متفاوت باشند.";
+
+      return ctx.reply(message, {
+        disable_web_page_preview: true,
+      });
+    } catch (error) {
+      console.error("Price API Error:", error);
+
+      return ctx.reply(
+        "❌ دریافت قیمت‌ها با مشکل مواجه شد.\nلطفاً کمی بعد دوباره امتحان کنید.",
+      );
+    }
+  });
+
   // دریافت پیام‌های متنی
   bot.on("text", async (ctx, next) => {
     if (ctx.chat.type !== "private") return next();
