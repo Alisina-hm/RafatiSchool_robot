@@ -32,6 +32,8 @@ const LOGOUT_BUTTON = "🚪 خروج از حساب";
 
 const OWNER_LOGIN_BUTTON = "👑 مالک مدرسه هستم";
 const MANAGER_LOGIN_BUTTON = "👨‍💼 مدیر مدرسه هستم";
+const MANAGER_CREATE_BUTTON = "🆕 ساخت حساب مدیر";
+const MANAGER_HAS_ACCOUNT_BUTTON = "🔑 از قبل حساب دارم";
 
 // منوی اصلی
 const mainMenu = Markup.keyboard([["🏫 ایجاد مدرسه"], [LOGIN_BUTTON]])
@@ -60,6 +62,13 @@ const loginRoleMenu = Markup.keyboard([
 // منوی ورود
 const loginMenu = Markup.keyboard([
   [FORGOT_PASSWORD_BUTTON],
+  [BACK_BUTTON],
+]).resize();
+
+// انتخاب ساخت حساب یا ورود مدیر
+const managerLoginMenu = Markup.keyboard([
+  [MANAGER_CREATE_BUTTON],
+  [MANAGER_HAS_ACCOUNT_BUTTON],
   [BACK_BUTTON],
 ]).resize();
 
@@ -132,21 +141,55 @@ const schoolHandler = (bot) => {
 
     deleteRegistration(ctx.from.id);
 
+    saveRegistration(ctx.from.id, null, "waiting_manager_choice");
+
+    await ctx.reply(
+      "👨‍💼 بخش مدیریت مدرسه\n\n" + "لطفاً مشخص کنید:",
+      managerLoginMenu,
+    );
+  });
+
+  // انتخاب ساخت حساب مدیر
+  bot.hears(MANAGER_CREATE_BUTTON, async (ctx) => {
+    if (ctx.chat.type !== "private") return;
+
     const existingManager = getManagerByUserId(ctx.from.id);
 
     if (existingManager) {
-      saveRegistration(ctx.from.id, null, "waiting_manager_username");
-
       return ctx.reply(
-        "👨‍💼 ورود مدیر مدرسه\n\n" + "نام کاربری اختصاصی خود را وارد کنید:",
-        loginMenu,
+        "❌ شما قبلاً حساب مدیر ساخته‌اید.\n" +
+          "برای ورود، گزینه «از قبل حساب دارم» را انتخاب کنید.",
+        managerLoginMenu,
       );
     }
 
+    deleteRegistration(ctx.from.id);
     saveRegistration(ctx.from.id, null, "waiting_manager_school_username");
 
     await ctx.reply(
-      "👨‍💼 ساخت حساب مدیر\n\n" + "ابتدا نام کاربری مدرسه را وارد کنید:",
+      "🆕 ساخت حساب مدیر\n\n" + "ابتدا نام کاربری مدرسه را وارد کنید:",
+      loginMenu,
+    );
+  });
+
+  // ورود با حساب قبلی
+  bot.hears(MANAGER_HAS_ACCOUNT_BUTTON, async (ctx) => {
+    if (ctx.chat.type !== "private") return;
+
+    const existingManager = getManagerByUserId(ctx.from.id);
+
+    if (!existingManager) {
+      return ctx.reply(
+        "❌ هنوز حساب مدیری برای شما ثبت نشده است.\n" +
+          "ابتدا باید یک حساب جدید بسازید.",
+        managerLoginMenu,
+      );
+    }
+
+    saveRegistration(ctx.from.id, null, "waiting_manager_username");
+
+    await ctx.reply(
+      "🔑 ورود به حساب مدیر\n\n" + "نام کاربری اختصاصی خود را وارد کنید:",
       loginMenu,
     );
   });
@@ -444,7 +487,7 @@ ${chat.id}
     }
 
     // -----------------------------
-    // ورود مالک: رمز عبور
+    // ورود مالک: رمز عبور و درخواست تأیید گروه
     // -----------------------------
     if (registration.step === "waiting_owner_password") {
       const school = getSchoolByUsername(registration.data.username);
@@ -467,16 +510,54 @@ ${chat.id}
         );
       }
 
-      saveSchoolSession(userId, school.id);
-      deleteRegistration(userId);
+      // ساخت توکن اختصاصی درخواست ورود
+      const approvalToken = crypto.randomBytes(8).toString("hex");
 
-      return ctx.reply(
-        "✅ ورود مالک با موفقیت انجام شد!\n\n" +
-          `🏫 مدرسه: ${school.title || school.username}\n` +
-          "👑 نقش: مالک مدرسه\n\n" +
-          "به پنل مالک خوش آمدید.",
-        dashboardMenu,
+      // ذخیره درخواست ورود در دیتابیس
+      saveRegistration(
+        userId,
+        school.group_id,
+        "awaiting_owner_login_approval",
+        {
+          username: school.username,
+          approvalToken,
+        },
       );
+
+      try {
+        // ارسال درخواست تأیید به گروه مدرسه
+        await ctx.telegram.sendMessage(
+          school.group_id,
+          "🔐 درخواست ورود مالک مدرسه\n\n" +
+            `🏫 مدرسه: ${school.title || school.username}\n` +
+            `👤 مالک: ${school.owner_name}\n\n` +
+            "برای ورود مالک به پنل، مالک اصلی گروه باید درخواست را تأیید کند:",
+          Markup.inlineKeyboard([
+            [
+              Markup.button.callback(
+                "✅ تأیید ورود مالک",
+                `school:loginapprove:${approvalToken}`,
+              ),
+            ],
+          ]),
+        );
+
+        return ctx.reply(
+          "📨 درخواست تأیید ورود به گروه مدرسه ارسال شد.\n\n" +
+            "پس از تأیید درخواست توسط مالک اصلی گروه، وارد پنل خواهید شد.",
+          loginMenu,
+        );
+      } catch (error) {
+        console.error("Owner login request error:", error);
+
+        deleteRegistration(userId);
+
+        return ctx.reply(
+          "❌ ارسال درخواست تأیید به گروه ناموفق بود.\n" +
+            "مطمئن شوید ربات هنوز در گروه حضور دارد و اجازه ارسال پیام دارد.",
+          mainMenu,
+        );
+      }
     }
 
     // -----------------------------
@@ -495,6 +576,73 @@ ${chat.id}
       });
 
       return ctx.reply("🔐 رمز عبور مدرسه را وارد کنید:", loginMenu);
+    }
+
+    // -----------------------------
+    // ساخت حساب مدیر: انتخاب نام کاربری
+    // -----------------------------
+    if (registration.step === "waiting_manager_new_username") {
+      const username = text.toLowerCase();
+
+      if (!/^[a-z0-9_]{4,20}$/.test(username)) {
+        return ctx.reply(
+          "❌ نام کاربری معتبر نیست.\n" +
+            "باید ۴ تا ۲۰ کاراکتر و شامل حروف انگلیسی، عدد یا _ باشد.",
+          backKeyboard,
+        );
+      }
+
+      if (isManagerUsernameTaken(username)) {
+        return ctx.reply(
+          "❌ این نام کاربری قبلاً استفاده شده است. نام دیگری انتخاب کنید.",
+          backKeyboard,
+        );
+      }
+
+      // بررسی مجدد اینکه مدیر حساب دیگری نساخته باشد
+      if (getManagerByUserId(userId)) {
+        deleteRegistration(userId);
+
+        return ctx.reply("❌ شما قبلاً حساب مدیر ساخته‌اید.", managerLoginMenu);
+      }
+
+      try {
+        const name = ctx.from.first_name || ctx.from.username || "مدیر";
+
+        const member = await ctx.telegram.getChatMember(
+          registration.data.groupId,
+          userId,
+        );
+
+        const isMember =
+          ["creator", "administrator", "member"].includes(member.status) ||
+          (member.status === "restricted" && member.is_member);
+
+        if (!isMember) {
+          return ctx.reply(
+            "❌ شما دیگر عضو گروه این مدرسه نیستید.",
+            managerLoginMenu,
+          );
+        }
+
+        createManager(registration.data.schoolId, userId, name, username);
+
+        saveSchoolSession(userId, registration.data.schoolId);
+
+        deleteRegistration(userId);
+
+        return ctx.reply(
+          "🎉 حساب مدیر با موفقیت ساخته شد!\n\n" +
+            `👤 نام: ${name}\n` +
+            `🔑 نام کاربری اختصاصی: ${username}\n\n` +
+            "از این پس می‌توانید با نام کاربری اختصاصی خود وارد شوید.",
+          dashboardMenu,
+        );
+      } catch (error) {
+        console.error("Manager creation error:", error);
+
+        return ctx.reply("❌ ساخت حساب مدیر با خطا مواجه شد.", mainMenu);
+      }
     }
 
     // -----------------------------
@@ -527,66 +675,96 @@ ${chat.id}
 
         return ctx.reply("❌ شما قبلاً حساب مدیر ساخته‌اید.", mainMenu);
       }
-
-      saveRegistration(userId, null, "waiting_manager_new_username", {
+      saveRegistration(userId, null, "waiting_manager_telegram_id", {
         schoolId: school.id,
         schoolUsername: school.username,
+        groupId: school.group_id,
       });
 
       return ctx.reply(
-        "✅ رمز عبور صحیح است.\n\n" +
-          "حالا یک نام کاربری اختصاصی برای حساب مدیریت خود انتخاب کنید.\n" +
-          "نام کاربری باید ۴ تا ۲۰ کاراکتر و شامل حروف انگلیسی، عدد یا _ باشد.",
+        "✅ اطلاعات مدرسه تأیید شد.\n\n" +
+          "حالا شناسه عددی تلگرام خود را وارد کنید.\n\n" +
+          `🆔 شناسه حساب شما: ${userId}\n\n` +
+          "⚠️ برای تأیید هویت، همین شناسه را ارسال کنید.",
         backKeyboard,
       );
     }
 
     // -----------------------------
-    // ساخت حساب مدیر: انتخاب نام کاربری
+    // ساخت حساب مدیر: بررسی شناسه تلگرام
     // -----------------------------
-    if (registration.step === "waiting_manager_new_username") {
-      const username = text.toLowerCase();
+    if (registration.step === "waiting_manager_telegram_id") {
+      const telegramId = text;
 
-      if (!/^[a-z0-9_]{4,20}$/.test(username)) {
+      // بررسی عددی بودن شناسه
+      if (!/^\d+$/.test(telegramId)) {
         return ctx.reply(
-          "❌ نام کاربری معتبر نیست.\n" +
-            "باید ۴ تا ۲۰ کاراکتر و شامل حروف انگلیسی، عدد یا _ باشد.",
+          "❌ شناسه تلگرام معتبر نیست.\nلطفاً فقط عدد وارد کنید.",
           backKeyboard,
         );
       }
 
-      if (isManagerUsernameTaken(username)) {
+      // تطبیق شناسه واردشده با حساب واقعی کاربر
+      if (telegramId !== String(userId)) {
         return ctx.reply(
-          "❌ این نام کاربری قبلاً استفاده شده است. نام دیگری انتخاب کنید.",
+          "❌ این شناسه متعلق به حساب تلگرام شما نیست.\n\n" +
+            `🆔 شناسه صحیح شما: ${userId}`,
           backKeyboard,
         );
+      }
+
+      // بررسی نداشتن حساب قبلی
+      const existingManager = getManagerByUserId(userId);
+
+      if (existingManager) {
+        deleteRegistration(userId);
+
+        return ctx.reply("❌ شما قبلاً حساب مدیر ساخته‌اید.", managerLoginMenu);
       }
 
       try {
-        const name = ctx.from.first_name || ctx.from.username || "مدیر";
+        // بررسی عضویت کاربر در گروه مدرسه
+        const member = await ctx.telegram.getChatMember(
+          registration.data.groupId,
+          userId,
+        );
 
-        createManager(registration.data.schoolId, userId, name, username);
+        const isMember =
+          ["creator", "administrator", "member"].includes(member.status) ||
+          (member.status === "restricted" && member.is_member);
 
-        saveSchoolSession(userId, registration.data.schoolId);
+        if (!isMember) {
+          return ctx.reply(
+            "❌ شما عضو گروه این مدرسه نیستید.\n\n" +
+              "ابتدا وارد گروه مدرسه شوید و دوباره تلاش کنید.",
+            backKeyboard,
+          );
+        }
 
-        deleteRegistration(userId);
+        // رفتن به مرحله انتخاب نام کاربری
+        saveRegistration(userId, null, "waiting_manager_new_username", {
+          schoolId: registration.data.schoolId,
+          schoolUsername: registration.data.schoolUsername,
+          groupId: registration.data.groupId,
+        });
 
         return ctx.reply(
-          "🎉 حساب مدیر با موفقیت ساخته شد!\n\n" +
-            `👤 نام: ${name}\n` +
-            `🔑 نام کاربری شما: ${username}\n` +
-            "🔒 رمز عبور: همان رمز مدرسه\n\n" +
-            "از این پس می‌توانید با نام کاربری اختصاصی خود و رمز مدرسه وارد شوید.",
-          dashboardMenu,
+          "✅ شناسه تلگرام و عضویت شما تأیید شد.\n\n" +
+            "حالا یک نام کاربری اختصاصی برای حساب مدیریت خود انتخاب کنید.\n\n" +
+            "نام کاربری باید ۴ تا ۲۰ کاراکتر و شامل حروف انگلیسی، عدد یا _ باشد.",
+          backKeyboard,
         );
       } catch (error) {
-        console.error("Manager creation error:", error);
+        console.error("Manager Telegram ID verification error:", error);
 
-        return ctx.reply("❌ ساخت حساب مدیر با خطا مواجه شد.", mainMenu);
+        return ctx.reply(
+          "❌ بررسی عضویت شما در گروه ناموفق بود.\n" +
+            "مطمئن شوید ربات در گروه حضور دارد و دوباره تلاش کنید.",
+          backKeyboard,
+        );
       }
     }
 
-    // -----------------------------
     // ورود مدیر: نام کاربری اختصاصی
     // -----------------------------
     if (registration.step === "waiting_manager_username") {
@@ -600,49 +778,43 @@ ${chat.id}
         );
       }
 
-      saveRegistration(userId, null, "waiting_manager_password", { username });
-
-      return ctx.reply("🔐 رمز عبور مدرسه را وارد کنید:", loginMenu);
-    }
-
-    // -----------------------------
-    // ورود مدیر: رمز عبور مدرسه
-    // -----------------------------
-    if (registration.step === "waiting_manager_password") {
-      const manager = getManagerByUsername(registration.data.username);
-
-      if (!manager || manager.user_id !== userId) {
-        deleteRegistration(userId);
-        return ctx.reply("❌ حساب مدیر پیدا نشد.", mainMenu);
-      }
-
-      const school = getSchoolByUsername(
-        // نام کاربری مدرسه از شناسه مدرسه به دست می‌آید
-        getSchoolUsernameById(manager.school_id),
-      );
+      const schoolUsername = getSchoolUsernameById(manager.school_id);
+      const school = getSchoolByUsername(schoolUsername);
 
       if (!school) {
         deleteRegistration(userId);
+
         return ctx.reply("❌ مدرسه پیدا نشد.", mainMenu);
       }
 
-      const valid = await bcrypt.compare(
-        ctx.message.text,
-        school.password_hash,
-      );
+      // بررسی عضویت فعلی در گروه مدرسه
+      try {
+        const member = await ctx.telegram.getChatMember(
+          school.group_id,
+          userId,
+        );
 
-      if (!valid) {
-        return ctx.reply("❌ رمز عبور مدرسه اشتباه است.", loginMenu);
+        const isMember =
+          ["creator", "administrator", "member"].includes(member.status) ||
+          (member.status === "restricted" && member.is_member);
+
+        if (!isMember) {
+          return ctx.reply("❌ شما دیگر عضو گروه این مدرسه نیستید.", loginMenu);
+        }
+      } catch (error) {
+        console.error("Manager membership check error:", error);
+
+        return ctx.reply("❌ بررسی عضویت شما در گروه ناموفق بود.", loginMenu);
       }
 
       saveSchoolSession(userId, school.id);
       deleteRegistration(userId);
 
       return ctx.reply(
-        "✅ ورود مدیر با موفقیت انجام شد!\n\n" +
+        "🎉 ورود مدیر با موفقیت انجام شد!\n\n" +
           `🏫 مدرسه: ${school.title || school.username}\n` +
           `👤 مدیر: ${manager.name}\n` +
-          "👨‍💼 نقش: مدیر مدرسه\n\n" +
+          `🔑 نام کاربری: ${manager.username}\n\n` +
           "به پنل مدیریت خوش آمدید.",
         dashboardMenu,
       );
@@ -1005,6 +1177,85 @@ ${chat.id}
       console.error("Password reset approval error:", error);
 
       await ctx.answerCbQuery("هنگام تأیید خطایی رخ داد.", {
+        show_alert: true,
+      });
+    }
+  });
+
+  // -----------------------------
+  // تأیید ورود مالک توسط مالک اصلی گروه
+  // -----------------------------
+  bot.action(/^school:loginapprove:([a-f0-9]{16})$/, async (ctx) => {
+    const token = ctx.match[1];
+    const userId = ctx.from.id;
+
+    try {
+      // دریافت درخواست ورود کاربر تأییدکننده
+      const registration = getRegistration(userId);
+
+      if (
+        !registration ||
+        registration.step !== "awaiting_owner_login_approval" ||
+        registration.data.approvalToken !== token ||
+        registration.group_id !== ctx.chat.id
+      ) {
+        return ctx.answerCbQuery(
+          "❌ این درخواست معتبر نیست یا منقضی شده است.",
+          { show_alert: true },
+        );
+      }
+
+      // بررسی اطلاعات مدرسه
+      const school = getSchoolByUsername(registration.data.username);
+
+      if (
+        !school ||
+        school.owner_id !== userId ||
+        school.group_id !== ctx.chat.id
+      ) {
+        return ctx.answerCbQuery(
+          "❌ فقط مالک اصلی این مدرسه اجازه تأیید دارد.",
+          { show_alert: true },
+        );
+      }
+
+      // بررسی مالک اصلی بودن کاربر در گروه
+      const owner = await ctx.telegram.getChatMember(ctx.chat.id, userId);
+
+      if (owner.status !== "creator") {
+        return ctx.answerCbQuery(
+          "❌ فقط مالک اصلی گروه می‌تواند درخواست را تأیید کند.",
+          { show_alert: true },
+        );
+      }
+
+      // ثبت ورود مالک
+      saveSchoolSession(userId, school.id);
+
+      // حذف درخواست موقت
+      deleteRegistration(userId);
+
+      await ctx.answerCbQuery("✅ ورود مالک تأیید شد.");
+
+      await ctx.editMessageText(
+        "✅ درخواست ورود مالک تأیید شد.\n\n" +
+          `🏫 مدرسه: ${school.title || school.username}\n` +
+          "👑 مالک اکنون می‌تواند وارد پنل شود.",
+      );
+
+      // ارسال پیام ورود موفق به مالک
+      await ctx.telegram.sendMessage(
+        userId,
+        "🎉 ورود شما با موفقیت تأیید شد!\n\n" +
+          `🏫 مدرسه: ${school.title || school.username}\n` +
+          "👑 نقش: مالک مدرسه\n\n" +
+          "به پنل مالک خوش آمدید.",
+        dashboardMenu,
+      );
+    } catch (error) {
+      console.error("Owner login approval error:", error);
+
+      await ctx.answerCbQuery("❌ هنگام تأیید درخواست خطایی رخ داد.", {
         show_alert: true,
       });
     }
